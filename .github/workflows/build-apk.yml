@@ -1,0 +1,290 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==========================================
+      # 1. Checkout Repository
+      # ==========================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+
+      # ==========================================
+      # 2. Setup Node.js
+      # ==========================================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+
+      # ==========================================
+      # 3. Setup Java
+      # ==========================================
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+
+      # ==========================================
+      # 4. Check Web Files
+      # ==========================================
+      - name: Check Web Files
+        run: |
+          echo "===== WEB FILES ====="
+          find www -maxdepth 3 -type f | sort
+
+          if [ ! -f "www/index.html" ]; then
+            echo "❌ ERROR: www/index.html not found!"
+            exit 1
+          fi
+
+          echo "✅ www/index.html found"
+
+
+      # ==========================================
+      # 5. Check App Icon
+      # ==========================================
+      - name: Check App Icon
+        run: |
+          if [ ! -f "assets/mknote-icon.png" ]; then
+            echo "❌ ERROR: assets/mknote-icon.png not found!"
+            exit 1
+          fi
+
+          echo "✅ assets/mknote-icon.png found"
+
+
+      # ==========================================
+      # 6. Create package.json
+      # ==========================================
+      - name: Create package.json
+        run: |
+          if [ ! -f package.json ]; then
+            npm init -y
+          fi
+
+
+      # ==========================================
+      # 7. Install Capacitor
+      # ==========================================
+      - name: Install Capacitor
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+
+
+      # ==========================================
+      # 8. Initialize Capacitor
+      # ==========================================
+      - name: Initialize Capacitor
+        run: |
+          npx cap init "MK Note" "com.mk.apnote" --web-dir www
+
+
+      # ==========================================
+      # 9. Add Android
+      # ==========================================
+      - name: Add Android Platform
+        run: |
+          npx cap add android
+
+
+      # ==========================================
+      # 10. Install Pillow
+      # ==========================================
+      - name: Install Pillow
+        run: |
+          python3 -m pip install pillow
+
+
+      # ==========================================
+      # 11. Generate Android Launcher Icons
+      # ==========================================
+      - name: Generate Android Launcher Icons
+        run: |
+          python3 - <<'PY'
+          from PIL import Image
+          import os
+
+          source = "assets/mknote-icon.png"
+
+          img = Image.open(source).convert("RGBA")
+
+          res = "android/app/src/main/res"
+
+          # ------------------------------------------
+          # Normal Android launcher icon sizes
+          # ------------------------------------------
+
+          sizes = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192
+          }
+
+          for folder, size in sizes.items():
+
+              path = os.path.join(res, folder)
+              os.makedirs(path, exist_ok=True)
+
+              icon = img.resize(
+                  (size, size),
+                  Image.Resampling.LANCZOS
+              )
+
+              icon.save(
+                  os.path.join(path, "ic_launcher.png"),
+                  "PNG"
+              )
+
+              icon.save(
+                  os.path.join(path, "ic_launcher_round.png"),
+                  "PNG"
+              )
+
+          # ------------------------------------------
+          # Adaptive icon foreground
+          # ------------------------------------------
+
+          foreground_path = os.path.join(
+              res,
+              "drawable-nodpi"
+          )
+
+          os.makedirs(foreground_path, exist_ok=True)
+
+          # 432x432 adaptive foreground
+          foreground = img.resize(
+              (432, 432),
+              Image.Resampling.LANCZOS
+          )
+
+          foreground.save(
+              os.path.join(
+                  foreground_path,
+                  "mknote_icon_foreground.png"
+              ),
+              "PNG"
+          )
+
+          print("✅ Launcher icons generated")
+          PY
+
+
+      # ==========================================
+      # 12. Create Adaptive Icon Resources
+      # ==========================================
+      - name: Create Adaptive Launcher Icons
+        run: |
+
+          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+
+          cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/mknote_icon_background"/>
+              <foreground android:drawable="@drawable/mknote_icon_foreground"/>
+          </adaptive-icon>
+          EOF
+
+
+          cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/mknote_icon_background"/>
+              <foreground android:drawable="@drawable/mknote_icon_foreground"/>
+          </adaptive-icon>
+          EOF
+
+
+      # ==========================================
+      # 13. Create Icon Background Color
+      # ==========================================
+      - name: Create Icon Background
+        run: |
+
+          mkdir -p android/app/src/main/res/values
+
+          cat > android/app/src/main/res/values/mknote_icon_colors.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="mknote_icon_background">#FFFFFF</color>
+          </resources>
+          EOF
+
+
+      # ==========================================
+      # 14. Sync Capacitor
+      # ==========================================
+      - name: Sync Android
+        run: |
+          npx cap sync android
+
+
+      # ==========================================
+      # 15. Fix Kotlin Duplicate Classes
+      # ==========================================
+      - name: Fix Kotlin Dependencies
+        run: |
+
+          cat >> android/app/build.gradle <<'EOF'
+
+          configurations.all {
+              resolutionStrategy.eachDependency { details ->
+                  if (details.requested.group == "org.jetbrains.kotlin") {
+                      details.useVersion "1.8.22"
+                  }
+              }
+
+              resolutionStrategy.force(
+                  "org.jetbrains.kotlin:kotlin-stdlib:1.8.22",
+                  "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22",
+                  "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22"
+              )
+          }
+
+          EOF
+
+
+      # ==========================================
+      # 16. Clean Gradle
+      # ==========================================
+      - name: Clean Gradle
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew clean
+
+
+      # ==========================================
+      # 17. Build APK
+      # ==========================================
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+
+      # ==========================================
+      # 18. Upload APK
+      # ==========================================
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MK-Note-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
